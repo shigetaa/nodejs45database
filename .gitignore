@@ -3,5 +3,6 @@ package.json
 package-lock.json
 *.sqlite
 aozora/
+leveldb-aozora/
 testdb/
 testdb2/
