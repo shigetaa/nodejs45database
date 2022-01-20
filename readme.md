@@ -189,7 +189,271 @@ node dl-aozora.js
 
 ### SQLite に作品を保存しよう
 
+それでは、ダウンロードした作品をデータベースに保存してみます。
+すでにダウンロード済みのHTMLファイルからも作者や作品名を取り出したいので、HTMLをjQueryライクに解析出来るモジュール「 `cheerio` 」を利用します。
+```bash
+npm i cheerio
+```
+作品を登録するだけでは面白くないので、作品の作者ランキングベスト30の中で登録回数を調べたプログラム`sqlite-aozora.js`を作成してます。
+
+```javascript
+// パスの指定など
+var FILES_DIR = __dirname + "/aozora";
+var DB_PATH = __dirname + "/aozora.sqlite";
+
+// モジュールの取り込み
+var sqlite3 = require('sqlite3').verbose();
+var cheerio = require('cheerio');
+var fs = require('fs');
+
+// DBに入れるファイル一覧を取得
+var files = fs.readdirSync(FILES_DIR);
+// HTMLファイルだけ残す
+files = files.filter(function (s) {
+	return s.match(/\.html$/);
+});
+
+// データベースを開く
+var db = new sqlite3.Database(DB_PATH);
+
+// データを登録
+db.serialize(function () {
+	// SQLを実行してテーブルを作成
+	db.run("CREATE TABLE IF NOT EXISTS items(" +
+		"item_id INTEGER PRIMARY KEY, " +
+		"author TEXT, title TEXT, body TEXT)");
+	// 挿入用プリペアドステートメントを準備
+	var ins_stmt = db.prepare(
+		'INSERT INTO items(author, title, body)' +
+		'VALUES(?, ?, ?)');
+	// 各HTMLファイルを処理
+	files.forEach(function (file, i, ar) {
+		var html = fs.readFileSync(FILES_DIR + "/" + file);
+		// HTMLファイルから情報を得る
+		var $ = cheerio.load(html);
+		var title = $(".title").text();
+		var author = $(".author").text();
+		var body = $('body').text();
+		// DBに挿入
+		ins_stmt.run(author, title, body);
+		console.log("+ " + title + " を登録");
+	});
+	ins_stmt.finalize();
+});
+
+// 作者の出現回数を調べる 
+console.log("集計結果:");
+db.each("SELECT author,COUNT(author) as cnt "
+	+ "FROM items GROUP BY author "
+	+ "ORDER BY cnt DESC",
+	function (err, row) {
+		console.log(row.cnt + "回:" + row.author);
+	});
+```
+上記のプログラムを実行すると、以下の様に表示されます。
+```bash
+node sqlite-aozora.js
+```
+```bash
++ 〔雨ニモマケズ〕 を登録
++ やまなし を登録
++ 注文の多い料理店 を登録
++ 蜘蛛の糸 を登録
++ 草枕 を登録
++ 坊っちゃん を登録
+...[省略]...
+集計結果:
+6回:宮沢賢治
+5回:夏目漱石
+3回:太宰治
+2回:芥川龍之介
+...[省略]...
+```
+
 ## NoSQL から LevelDB を使ってみよう
+
+次に、関係データベースモデルを利用しない、LevelDBデータベースを利用したいと思います。
+そもそも「LevelDB」とは、Key-Value型データストアの一つで、Googleの研究者が開発したものです。
+C++で書かれていますが、多くのプログラミング言語から利用できるようになっています。
+ちなみに、HTML5の仕様の一つに「IndexdDB」の仕様がありますが、Webブラウザ「google Chrome」でIndexdDBを実装するために、LevelDBが開発されたそうです。
+「LevelDB」は組み込み用とで使えるデータベースで、非常に手軽に使う事ができます。
+では、早速データベースを利用するモジュール「 `level` 」モジュールをインストールしてみましょう。
+```bash
+npm i level
+```
+基本的な使い方のプログラムを`leveldb-test.js`として作成してみましょう。
+```javascript
+// モジュールの読み込み
+var levelup = require('level');
+// ローカルＤＢを開く
+var db = levelup('./testdb');
+
+// 値を設定
+db.put('Apple', 'red', function (err) {
+	if (err) { console.log('Error', err); return; }
+	testGet();
+});
+
+// 値を取得
+function testGet() {
+	db.get('Apple', function (err, value) {
+		if (err) { console.log('Error', err); return; }
+		console.log('Apple=' + value);
+		testBatch();
+	});
+}
+
+// 一括設定
+function testBatch() {
+	db.batch()
+		.put('Mango', 'yellow')
+		.put('Banana', 'yellow')
+		.put('Kiwi', 'green')
+		.write(function () { testGet2(); });
+}
+// 値を取得
+function testGet2() {
+	db.get('Banana', function (err, value) {
+		console.log('Banana=' + value);
+	});
+}
+```
+上記のプログラムを実行すると、以下の様に表示されます。
+```bash
+node leveldb-test.js
+```
+```bash
+Apple=red
+Banana=yellow
+```
+まず、`levelup()`メソッドでデータベースを開きます。
+
+そして、`put()`メソッドを実行すると、値を保存することができます。
+```javascript
+// [書式] 値の設定
+db.put(key, value, function(err){...})
+```
+`get()`メソッドを実行すると、値を取得することができます。
+```javascript
+// [書式]値の取得
+db.get(key, function(err, value){...})
+```
+ともに、値が即時に反映されるわけではなく、メソッドが成功した時に、コールバック関数に通知される仕組みとなってます。
+
+値の一括設定方法については、`batch()`メソッドの後、`write()`メソッドまで、メソッドチェーンを利用して、連続で値を書き込む事が出来るようになっています。
+他にも、値を設定する`put()`や、キーを削除する`del()`メソッドも利用できます。
+
 ### LevelDB で検索したいとき
 
+ところで、levelDBのようなKVS(Key-Value Store)では、どのようにして任意のデータを探したら良いのでしょうか。
+早速、`leveldb-test2.js`ファイルにプログラムを記述してみます。
+```javascript
+var levelup = require('level');
+// データベースを開く(データはJSONで)
+var opt = { valueEncoding: 'json' };
+var db = levelup('./testdb2', opt);
+
+// 一括で値を設定
+db.batch()
+	.put('fruits!apple', {
+		name: 'Apple',
+		price: 300,
+		color: 'red'
+	})
+	.put('fruits!orange', {
+		name: 'Orange',
+		price: 180,
+		color: 'orange'
+	})
+	.put('fruits!banana', {
+		name: 'Banana',
+		price: 200,
+		color: 'yellow'
+	})
+	.put('fruits!kiwi', {
+		name: 'Kiwi',
+		price: 220,
+		color: 'green'
+	})
+	.put('snack!poteto', {
+		name: 'Poteto-Snack',
+		price: 340,
+		color: 'brown'
+	})
+	.put('snack!choco', {
+		name: 'Choco-Snack',
+		price: 220,
+		color: 'black'
+	})
+	.write(testKeys);
+
+// キーの一覧を取得する
+function testKeys() {
+	console.log("keys:")
+	db.createKeyStream()
+		.on('data', function (key) {
+			console.log(" - " + key);
+		})
+		.on('end', testKeyValues);
+}
+
+// キーと値の一覧を取得する
+function testKeyValues() {
+	console.log("\nkey-value-list:");
+	db.createReadStream()
+		.on('data', function (data) {
+			var key = data.key;
+			var o = data.value;
+			console.log("+ key=" + data.key);
+			console.log("| color=" + o.color);
+			console.log("| price=" + o.price);
+		})
+		.on('end', testSearch);
+}
+
+// 検索を行う
+function testSearch() {
+	console.log('\nrange-search:');
+	var opt = {
+		gt: "snack!",
+		lte: "snack!\xFF"
+	};
+	db.createReadStream(opt)
+		.on('data', function (data) {
+			console.log("+ key=" + data.key);
+		})
+		.on('end', function () {
+			console.log('ok')
+		});
+}
+
+```
+上記のプログラムを実行すると、以下の様に表示されます。
+```bash
+node leveldb-test2.js
+```
+```bash
+keys:
+ - fruits!apple
+ - fruits!banana
+ - fruits!kiwi
+ - fruits!orange
+ - snack!choco
+ - snack!poteto
+
+key-value-list:
++ key=fruits!apple
+| color=red
+| price=300
+...[省略]...
+
+range-search:
++ key=fruits!apple
++ key=fruits!banana
++ key=fruits!kiwi
++ key=fruits!orange
+ok
+```
 ## 青空文庫のデータを LevelDB に保存
+
+
