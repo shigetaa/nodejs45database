@@ -66,6 +66,127 @@ Apple:300
 ```
 
 ## Web からダウンロードしてSQLite に保存しよう
+
+ここでは、Webサイト「青空文庫」から人気作品をダウンロードしてSQLite に格納するプログラムを`dl-aozora.js`と言うファイル名で作成していきます。
+
+[参考ページ:https://github.com/shigetaa/nodejs23webdownloads](https://github.com/shigetaa/nodejs23webdownloads)
+
+```javascript
+var URL_RANKING = "https://www.aozora.gr.jp/access_ranking/2021_xhtml.html";
+var MAX_RANK = 30; // 30位までを取得する
+var SAVE_DIR = __dirname + "/aozora";
+
+// モジュールの取り込み
+var client = require('cheerio-httpcli');
+var fs = require('fs');
+var URL = require('url');
+
+// 作品一覧データ保存用
+var cardlist = [];
+
+// 作品データ保存用のディレクトリを作る
+if (!fs.existsSync(SAVE_DIR)) fs.mkdirSync(SAVE_DIR);
+
+// ランキングページをダウンロード
+client.fetch(URL_RANKING, function (err, $, res) {
+	if (err) { console.log("DL error"); return; }
+	// ランキングのテーブル全行を取得
+	var tr = $("table.list tr");
+	if (!tr) {
+		console.log("ページの形式エラー"); return;
+	}
+	// テーブルの各行を反復
+	for (var i = 0; i < tr.length; i++) {
+		// 必要な要素を調べる
+		var cells = tr.eq(i).children();
+		var rank = parseInt(cells.eq(0).text());
+		var link = cells.eq(1);
+		var href = link.children('a').attr('href')
+		var name = link.text().replace(/(^\s+|\s+$)/, "");
+		// console.log(rank, name, href);
+		if (isNaN(rank) || rank > MAX_RANK) continue;
+		// 相対パスを絶対パスに変換 
+		href = URL.resolve(URL_RANKING, href);
+		cardlist.push([rank, name, href]);
+	}
+	downloadNextFile();
+});
+
+// 各作品をダウンロードする
+function downloadNextFile() {
+	if (cardlist.length == 0) {
+		console.log("処理完了");
+		return;
+	}
+	// 遅延処理させる
+	setTimeout(function () {
+		var card = cardlist.shift();
+		downloadCard(card);
+	}, 1000);
+}
+
+// カードをダウンロードする 
+function downloadCard(card) {
+	var index = card[0], name = card[1], link = card[2];
+	console.log("図書カード" + index + ":" + name);
+	client.fetch(link, function (err, $, res) {
+		if (err) { console.log("ERROR"); return; }
+		// 全てのリンクを取得し作品ページを類推する
+		var xhtml_link = "";
+		$("a").each(function (idx) {
+			var text = $(this).text();
+			var href = $(this).attr('href');
+			if (text.indexOf("XHTML版で読む") >= 0) {
+				// 相対パスを絶対パスに変換
+				href = URL.resolve(link, href);
+				xhtml_link = href;
+				return false; // これ以後eachしない
+			}
+		});
+		if (xhtml_link == "") {
+			console.log("作品リンクが見つかりません");
+		}
+		// 作品をダウンロードする
+		var path = SAVE_DIR + "/" + index + ".html";
+		console.log("ダウンロード開始:" + name);
+		// 作品のダウンロード時User-Agentの明示が必要 
+		//client.setBrowser('chrome');
+		client.fetch(xhtml_link, function (err, $, res, body) {
+			body = body.replace(/Shift_JIS/ig, "UTF-8");
+			fs.writeFileSync(path, body, "utf-8");
+			console.log("完了:" + name);
+			downloadNextFile();
+		});
+	});
+}
+```
+上記のプログラムを実行すると、以下の様に表示されます。
+```bash
+node dl-aozora.js 
+```
+```bash
+図書カード1:〔雨ニモマケズ〕
+ダウンロード開始:〔雨ニモマケズ〕
+完了:〔雨ニモマケズ〕
+図書カード2:走れメロス
+ダウンロード開始:走れメロス
+完了:走れメロス
+図書カード3:山月記
+ダウンロード開始:山月記
+完了:山月記
+図書カード4:羅生門
+ダウンロード開始:羅生門
+完了:羅生門
+図書カード5:こころ
+ダウンロード開始:こころ
+完了:こころ
+処理完了
+...[省略]...
+```
+上記のプログラム補足説明として、外部のサーバーに対して連続でアクセスすると迷惑がかかるので、1秒間隔で通信をしてサーバー負荷を低減する。
+最初のページで、作品一覧の詳細ページURLを取得して、詳細ページ内を調査して、作品ページURLを取得後、htmlページをダウンロードして保存する。
+保存時には、青空文庫ページは、文字コードSHIFT_JISで作成されているが、`cheerio-httpcli`モジュールでデータを取得時に`UTF-8`に変換してくれるので、htmlページの文字コード宣言部分のSHIFT_JIS文字部分をUTF-8に置換処理をして、ダウンロード保存を処理する。
+
 ### SQLite に作品を保存しよう
 
 ## NoSQL から LevelDB を使ってみよう
